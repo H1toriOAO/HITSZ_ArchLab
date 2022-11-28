@@ -47,6 +47,10 @@ class SaturatingCnt
         UINT8 getVal() { return m_val; }
 
         bool isTaken() { return (m_val > (1 << m_wid)/2 - 1); }
+
+        size_t getWidth() {
+            return m_wid;
+        }
 };
 
 // 移位寄存器 (N < 128)
@@ -124,48 +128,75 @@ class BHTPredictor: public BranchPredictor
 
         BOOL predict(ADDRINT addr)
         {
-        	int tag = truncate(addr, 8);
-            return m_scnt[tag].isTaken();
+            return m_scnt[truncate(addr, m_entries_log)].isTaken();
         }
 
         void update(BOOL takenActually, BOOL takenPredicted, ADDRINT addr)
         {
-        	int tag = truncate(addr, 8);
-        
-            switch(m_scnt[addr].getVal()) {
-                case 0: {
-                    if (takenActually) {
+        	UINT64 tag = truncate(addr, m_entries_log);
+
+            if (m_scnt[tag].getWidth() == 2) {
+                if (takenActually) {
+                    if (m_scnt[tag].getVal() == 1) {
                         m_scnt[tag].increase();
                     }
-                    
-                    break;
+
+                    m_scnt[tag].increase();
+                } else {
+                    if (m_scnt[tag].getVal() == 2) {
+                        m_scnt[tag].decrease();
+                    }
+
+                    m_scnt[tag].decrease();
                 }
-                case 1: {
-                    if (takenActually) {
-                        m_scnt[tag].increase();
-                        m_scnt[tag].increase();
-                    } else {
-                        m_scnt[tag].decrease();
+            } else if (m_scnt[tag].getWidth() == 3) {
+                switch(m_scnt[tag].getVal()) {
+                    case 0b000: {
+                        if (takenActually) {
+                            m_scnt[tag].increase();
+                        }
+
+                        break;
                     }
-                    
-                    break;
-                }
-                case 3: {
-                    if (!takenActually) {
-                        m_scnt[tag].decrease();
+                    case 0b011: {
+                        if (takenActually) {
+                            m_scnt[tag].reset();
+                            m_scnt[tag].increase();
+                            m_scnt[tag].increase();
+                        } else {
+                            m_scnt[tag].decrease();
+                        }
+
+                        break;
                     }
-                    
-                    break;
-                }
-                case 2: {
-                    if (takenActually) {
-                        m_scnt[tag].increase();
-                    } else {
-                        m_scnt[tag].decrease();
-                        m_scnt[tag].decrease();
+                    case 0b111: {
+                        if (!takenActually) {
+                            m_scnt[tag].decrease();
+                        }
+
+                        break;
                     }
-                    
-                    break;
+                    case 0b100: {
+                        if (!takenActually) {
+                            m_scnt[tag].decrease();
+                            m_scnt[tag].decrease();
+                            m_scnt[tag].decrease();
+                            m_scnt[tag].decrease();
+                        } else {
+                            m_scnt[tag].increase();
+                        }
+
+                        break;
+                    }
+                    default: {
+                        if (takenActually) {
+                            m_scnt[tag].increase();
+                        } else {
+                            m_scnt[tag].decrease();
+                        }
+
+                        break;
+                    }
                 }
             }
         }
@@ -212,66 +243,114 @@ class GlobalHistoryPredictor: public BranchPredictor
         // Only for TAGE: return a tag according to the specificed address
         UINT128 get_tag(ADDRINT addr)
         {
-            // TODO
+            return truncate((*hash)(addr, m_ghr->getVal()), m_entries_log);
         }
 
         // Only for TAGE: return GHR's value
         UINT128 get_ghr()
         {
-            // TODO
+            return m_ghr->getVal();
         }
 
         // Only for TAGE: reset a saturating counter to default value (which is weak taken)
         void reset_ctr(ADDRINT addr)
         {
-            // TODO
+            m_scnt[get_tag(addr)].reset();
         }
 
         bool predict(ADDRINT addr)
         {
-            UINT8 tag = truncate(hash(addr, m_ghr->getVal()), 16);
-            return m_scnt[tag].isTaken();
+            return m_scnt[truncate((*hash)(addr, m_ghr->getVal()), m_entries_log)].isTaken();
         }
 
         void update(bool takenActually, bool takenPredicted, ADDRINT addr)
         {
-        	UINT8 tag = truncate(hash(addr, m_ghr->getVal()), 16);
-            m_ghr->shiftIn(takenActually);
-            
-            switch(m_scnt[addr].getVal()) {
-                case 0: {
-                    if (takenActually) {
+        	UINT64 tag = truncate((*hash)(addr, m_ghr->getVal()), m_entries_log);
+
+            if (m_scnt[tag].getWidth() == 2) {
+                if (takenActually) {
+                    if (m_scnt[tag].getVal() == 1) {
                         m_scnt[tag].increase();
                     }
-                    
-                    break;
+
+                    m_scnt[tag].increase();
+                    m_ghr->shiftIn(true);
+                } else {
+                    if (m_scnt[tag].getVal() == 2) {
+                        m_scnt[tag].decrease();
+                    }
+
+                    m_scnt[tag].decrease();
+                    m_ghr->shiftIn(false);
                 }
-                case 1: {
-                    if (takenActually) {
-                        m_scnt[tag].increase();
-                        m_scnt[tag].increase();
-                    } else {
-                        m_scnt[tag].decrease();
+            } else if (m_scnt[tag].getWidth() == 3) {
+                switch(m_scnt[tag].getVal()) {
+                    case 0b000: {
+                        if (takenActually) {
+                            m_scnt[tag].increase();
+
+                            m_ghr->shiftIn(true);
+                        } else {
+                            m_ghr->shiftIn(false);
+                        }
+
+                        break;
                     }
-                    
-                    break;
-                }
-                case 3: {
-                    if (!takenActually) {
-                        m_scnt[tag].decrease();
+                    case 0b011: {
+                        if (takenActually) {
+                            m_scnt[tag].reset();
+                            m_scnt[tag].increase();
+                            m_scnt[tag].increase();
+
+                            m_ghr->shiftIn(true);
+                        } else {
+                            m_scnt[tag].decrease();
+
+                            m_ghr->shiftIn(false);
+                        }
+
+                        break;
                     }
-                    
-                    break;
-                }
-                case 2: {
-                    if (takenActually) {
-                        m_scnt[tag].increase();
-                    } else {
-                        m_scnt[tag].decrease();
-                        m_scnt[tag].decrease();
+                    case 0b111: {
+                        if (!takenActually) {
+                            m_scnt[tag].decrease();
+
+                            m_ghr->shiftIn(false);
+                        } else {
+                            m_ghr->shiftIn(true);
+                        }
+
+                        break;
                     }
-                    
-                    break;
+                    case 0b100: {
+                        if (!takenActually) {
+                            m_scnt[tag].decrease();
+                            m_scnt[tag].decrease();
+                            m_scnt[tag].decrease();
+                            m_scnt[tag].decrease();
+
+                            m_ghr->shiftIn(false);
+                        } else {
+                            m_scnt[tag].increase();
+
+                            m_ghr->shiftIn(true);
+                        }
+
+                        break;
+                    }
+                    default: {
+                        if (takenActually) {
+                            m_scnt[tag].increase();
+
+                            m_ghr->shiftIn(true);
+                        } else {
+                            m_scnt[tag].decrease();
+
+                            m_ghr->shiftIn(false);
+                        }
+
+                        break;
+                    }
                 }
             }
         }
@@ -297,34 +376,44 @@ class TournamentPredictor: public BranchPredictor
         ~TournamentPredictor()
         {
             delete m_gshr;
-            
+
             delete m_BPs[0];
             delete m_BPs[1];
         }
 
         bool predict(ADDRINT addr)
         {
-        	bool result0 = m_BPs[0]->predict(addr), result1 = m_BPs[1]->predict(addr);
-        	
-        	return m_gshr->isTaken() ? result1 : result0;
+            return m_BPs[!!(m_gshr->getVal() & 2)]->predict(addr);
         }
         
         void update(bool takenActually, bool takenPredicted, ADDRINT addr)
         {
-        	bool result0 = m_BPs[0]->predict(addr), result1 = m_BPs[1]->predict(addr);
+        	bool result0 = (m_BPs[0]->predict(addr) == takenActually),
+                 result1 = (m_BPs[1]->predict(addr) == takenActually);
         	
-        	if (takenActually == result0 && result0 != result1) {
-        		m_gshr->decrease();
-        	} else if (takenActually == result1 && result1 != result0) {
-        		m_gshr->increase();
-        	}
+        	if (!result0 && result1) {
+                if (m_gshr->getVal() == 1) {
+                    m_gshr->increase();
+                }
+
+                m_gshr->increase();
+            } else if (result0 && !result1) {
+                if (m_gshr->getVal() == 2) {
+                    m_gshr->decrease();
+                }
+
+                m_gshr->decrease();
+            }
+
+            m_BPs[0]->update(takenActually, takenPredicted, addr);
+            m_BPs[1]->update(takenActually, takenPredicted, addr);
         }
 };
 
 /* ===================================================================== */
 /* TArget GEometric history length Predictor                             */
 /* ===================================================================== */
-/*
+
 template<UINT128 (*hash1)(UINT128 pc, UINT128 ghr), UINT128 (*hash2)(UINT128 pc, UINT128 ghr)>
 class TAGEPredictor: public BranchPredictor
 {
@@ -348,14 +437,14 @@ class TAGEPredictor: public BranchPredictor
         //          Tn_entry_num_log:   各子预测器T[1 : m_tnum - 1]的PHT行数的对数
         //          scnt_width:         Width of saturating counter (3 by default)
         //          rst_period:         Reset period of usefulness
-        TAGEPredictor(size_t tnum, size_t T0_entry_num_log, size_t T1ghr_len, float alpha, size_t Tn_entry_num_log, size_t scnt_width = 3, size_t rst_period = 256*1024)
+        TAGEPredictor(size_t tnum, size_t T0_entry_num_log, size_t T1ghr_len, float alpha, size_t Tn_entry_num_log, size_t scnt_width = 2, size_t rst_period = 256*1024)
         : m_tnum(tnum), m_entries_log(Tn_entry_num_log), m_rst_period(rst_period), m_rst_cnt(0)
         {
             m_T = new BranchPredictor* [m_tnum];
             m_T_pred = new bool [m_tnum];
             m_useful = new UINT8* [m_tnum];
 
-            m_T[0] = new BHTPredictor(1 << T0_entry_num_log);
+            m_T[0] = new BHTPredictor(T0_entry_num_log);
 
             size_t ghr_size = T1ghr_len;
             for (size_t i = 1; i < m_tnum; i++)
@@ -380,23 +469,88 @@ class TAGEPredictor: public BranchPredictor
 
         bool predict(ADDRINT addr)
         {
-            // TODO
+            provider_indx = 0;
+            m_T_pred[0] = m_T[0]->predict(addr);
+
+            for (size_t i = 1; i < m_tnum; i++) {
+                GlobalHistoryPredictor<hash1> *T = (GlobalHistoryPredictor<hash1>*)m_T[i];
+                UINT128 tag2 = truncate((*hash2)(addr, T->get_ghr()), m_entries_log);
+                m_T_pred[i] = T->predict(addr);
+
+                if (tag2 == T->get_tag(addr)) {
+                    altpred_indx = provider_indx;
+                    provider_indx = i;
+                }
+            }
+
+            return m_T_pred[provider_indx];
         }
 
         void update(bool takenActually, bool takenPredicted, ADDRINT addr)
         {
-            // TODO: Update provider itself
+            m_rst_cnt++;
+            // 更新provider
+            m_T[provider_indx]->update(takenActually, takenPredicted, addr);
 
-            // TODO: Update usefulness
+            // 更新useful
+            if (provider_indx != 0) {
+                UINT64 tag = ((GlobalHistoryPredictor<hash1>*)m_T[provider_indx])->get_tag(addr);
 
-            // TODO: Reset usefulness periodically
+                if (takenActually) {
+                    if (takenPredicted) {
+                        if (!m_T_pred[altpred_indx]) {
+                            m_useful[provider_indx][tag]++;
+                        }
+                    } else {
+                        if (m_T_pred[altpred_indx]) {
+                            m_useful[provider_indx][tag]--;
+                        }
+                    }
+                } else {
+                    if (takenPredicted) {
+                        if (!m_T_pred[altpred_indx]) {
+                            m_useful[provider_indx][tag]--;
+                        }
+                    } else {
+                        if (m_T_pred[altpred_indx]) {
+                            m_useful[provider_indx][tag]++;
+                        }
+                    }
+                }
+            }
 
-            // TODO: Entry replacement
+            // 周期性useful清零
+            if (m_rst_cnt == m_rst_period) {
+                for (size_t i = 1; i < m_tnum; i++) {
+                    for (int j = 0; j < (1 << m_entries_log); j++) {
+                        m_useful[i][j] = 0;
+                    }
+                }
+
+                m_rst_cnt = 0;
+            }
+
+            bool updateFlag = false;
+            if ((takenActually && !takenPredicted) || (!takenActually && takenPredicted)) {
+                for (size_t i = provider_indx + 1; i < m_tnum; i++) {
+                    UINT64 tag = truncate((*hash1)(addr, ((GlobalHistoryPredictor<hash1>*)m_T[i])->get_ghr()), m_entries_log);
+                    if (m_useful[i][tag] == 0) {
+                        ((GlobalHistoryPredictor<hash1>*)m_T[i])->reset_ctr(addr);
+                        updateFlag = true;
+
+                        break;
+                    }
+                }
+
+                if (!updateFlag) {
+                    for (size_t i = provider_indx + 1; i < m_tnum; i++) {
+                        UINT64 tag = truncate((*hash1)(addr, ((GlobalHistoryPredictor<hash1>*)m_T[i])->get_ghr()), m_entries_log);
+                        m_useful[i][tag]--;
+                    }
+                }
+            }
         }
 };
-*/
-
-
 
 // This function is called every time a control-flow instruction is encountered
 void predictBranch(ADDRINT pc, BOOL direction)
@@ -479,7 +633,10 @@ INT32 Usage()
 int main(int argc, char * argv[])
 {
     // TODO: New your Predictor below.
-    BP = new BHTPredictor(8);
+    // BP = new BHTPredictor(12);
+    // BP = new GlobalHistoryPredictor<f_xor>(16, 16);
+    // BP = new TournamentPredictor(new BHTPredictor(16), new GlobalHistoryPredictor<f_xor>(16, 16));
+    // BP = new TAGEPredictor<f_xor, f_xor1>(5, 10, 4, 2, 12);
 
     // Initialize pin
     if (PIN_Init(argc, argv)) return Usage();
