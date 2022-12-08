@@ -1,0 +1,4 @@
+BasedOnStyle: WebKit
+SortIncludes: false
+AlignTrailingComments: true
+AlignConsecutiveDeclarations: AcrossEmptyLines
